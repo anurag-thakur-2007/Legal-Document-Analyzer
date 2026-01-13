@@ -1,10 +1,20 @@
 streamlit
+
+# Core AI / orchestration
 langchain
 langgraph
-pinecone-client
-python-dotenv
 transformers
 torch
-pypdf
-PyPDF2
 sentence-transformers
+
+# Vector DB
+pinecone-client
+python-dotenv
+
+# Document parsing
+PyPDF2
+python-docx
+pypdf
+
+# Utilities
+numpy
