@@ -12,7 +12,7 @@ HF_API_TOKEN = os.getenv("HF_API_TOKEN") or st.secrets.get("HF_API_TOKEN")
 if not HF_API_TOKEN:
     raise ValueError("HF_API_TOKEN not found in environment variables or Streamlit secrets")
 
-MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
+MODEL_NAME = "google/gemma-2b-it"
 
 @lru_cache(maxsize=1)
 def get_client():
