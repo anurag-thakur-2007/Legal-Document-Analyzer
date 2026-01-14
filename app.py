@@ -656,8 +656,39 @@ def run_analysis(uploaded_file, tone: str, focus: List[str], risk_threshold: flo
         "risk_threshold": risk_threshold
     })
 
-    result = final_state["final_report"]
+        result = final_state["final_report"]
 
+    # -------------------------------
+    # Normalize final report structure
+    # -------------------------------
+    normalized_result = {
+        "summary": result.get("summary")
+        or result.get("executive_summary")
+        or result.get("overall_summary")
+        or "Summary not generated",
+
+        "confidence": result.get("confidence", 0.85),
+        "risk_score": result.get("risk_score", 0.5),
+        "domains": result.get("domains", {})
+    }
+
+    # -------------------------------
+    # Save normalized analysis to DB
+    # -------------------------------
+    save_analysis(
+        st.session_state.db_conn,
+        st.session_state.contract_info["contract_id"],
+        normalized_result,
+        {
+            "tone": tone,
+            "domains": focus,
+            "risk_threshold": risk_threshold
+        }
+    )
+
+    return normalized_result
+
+    
     # 4️⃣ Save REAL analysis to DB
     save_analysis(
         st.session_state.db_conn,
