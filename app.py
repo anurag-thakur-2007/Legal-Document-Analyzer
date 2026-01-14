@@ -656,7 +656,7 @@ def run_analysis(uploaded_file, tone: str, focus: List[str], risk_threshold: flo
         "risk_threshold": risk_threshold
     })
 
-        result = final_state["final_report"]
+    result = final_state["final_report"]
 
     # -------------------------------
     # Normalize final report structure
