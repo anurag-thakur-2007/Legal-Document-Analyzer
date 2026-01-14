@@ -1,4 +1,5 @@
 import os
+import streamlit as st
 from huggingface_hub import InferenceClient
 from functools import lru_cache
 
@@ -6,15 +7,12 @@ from functools import lru_cache
 # Hugging Face Inference Client (API-based)
 # =====================================================
 
-HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+HF_API_TOKEN = os.getenv("HF_API_TOKEN") or st.secrets.get("HF_API_TOKEN")
 
 if not HF_API_TOKEN:
-    raise ValueError("HF_API_TOKEN not found in environment variables")
+    raise ValueError("HF_API_TOKEN not found in environment variables or Streamlit secrets")
 
 MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
-# You can also use:
-# "Qwen/Qwen2.5-1.5B-Instruct"
-# "google/gemma-2b-it"
 
 @lru_cache(maxsize=1)
 def get_client():
