@@ -1,27 +1,30 @@
 import os
-import streamlit as st
-from huggingface_hub import InferenceClient
-from functools import lru_cache
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # =====================================================
-# Hugging Face Inference Client (API-based)
+# OpenAI Chat Model (API-based)
 # =====================================================
 
-HF_API_TOKEN = os.getenv("HF_API_TOKEN") or st.secrets.get("HF_API_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not HF_API_TOKEN:
-    raise ValueError("HF_API_TOKEN not found in environment variables or Streamlit secrets")
+if not OPENAI_API_KEY:
+    try:
+        import streamlit as st
+        OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        pass
 
-MODEL_NAME = "google/gemma-2b-it"
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY not found in environment variables")
 
-@lru_cache(maxsize=1)
-def get_client():
-    """
-    Cached Hugging Face inference client
-    """
-    return InferenceClient(
-        model=MODEL_NAME,
-        token=HF_API_TOKEN
+def get_llm():
+    return ChatOpenAI(
+        model="gpt-3.5-turbo",
+        temperature=0.2,
+        openai_api_key=OPENAI_API_KEY
     )
 
 # =====================================================
@@ -30,20 +33,14 @@ def get_client():
 
 def ask_llm(prompt: str) -> str:
     """
-    Safe LLM call with fallback for Streamlit Cloud stability
+    OpenAI LLM call for fast and accurate processing
     """
     try:
-        client = get_client()
-        response = client.text_generation(
-            prompt=prompt,
-            max_new_tokens=300,
-            temperature=0.2,
-            top_p=0.95,
-            do_sample=True
-        )
-        return response.strip()
-
-    except Exception:
+        llm = get_llm()
+        response = llm.invoke(prompt)
+        return response.content.strip()
+    except Exception as e:
+        print(f"LLM Error: {e}")
         # 🔹 Fallback output (DEMO SAFE)
         return (
             "The contract contains multiple risk areas including termination clauses, "

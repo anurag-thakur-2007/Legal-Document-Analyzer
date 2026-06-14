@@ -1,4 +1,9 @@
 streamlit
+fastapi
+uvicorn
+requests
+python-multipart
+langchain-openai
 
 # Core AI / orchestration
 langchain

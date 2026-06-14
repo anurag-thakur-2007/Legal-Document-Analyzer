@@ -3,9 +3,15 @@ import time
 import random
 import json
 import sqlite3
+import os
+import jwt
+from dotenv import load_dotenv
+from streamlit_oauth import OAuth2Component
 from datetime import datetime
 from typing import Dict, Any, List
 import hashlib
+
+load_dotenv()
 from src.parser import load_contract
 from src.analyzer.clause_extractor import extract_clauses
 from src.langgraph_workflow import build_workflow
@@ -56,6 +62,16 @@ def init_database():
     ''')
     
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE,
+            name TEXT,
+            picture TEXT,
+            last_login TEXT
+        )
+    ''')
+    
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS analyses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             contract_id TEXT,
@@ -100,6 +116,18 @@ def init_database():
 # =====================================================
 # DATABASE OPERATIONS
 # =====================================================
+def save_user(conn, email: str, name: str, picture: str):
+    """Save or update user credentials"""
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO users (email, name, picture, last_login)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            name=excluded.name,
+            picture=excluded.picture,
+            last_login=excluded.last_login
+    ''', (email, name, picture, datetime.now().isoformat()))
+    conn.commit()
 def save_contract(conn, contract_id: str, filename: str):
     """Save contract metadata to database"""
     cursor = conn.cursor()
@@ -596,10 +624,67 @@ textarea:focus {
 """, unsafe_allow_html=True)
 
 # =====================================================
+# AUTHENTICATION SETUP
+# =====================================================
+# Load from .env or st.secrets
+CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_TOKEN_URL = "https://oauth2.googleapis.com/revoke"
+
+if "user_info" not in st.session_state:
+    st.session_state.user_info = None
+
+if not st.session_state.user_info:
+    st.markdown("""
+    <div class="header-card" style="text-align: center; margin-top: 10vh;">
+        <h1>⚖️ AI Legal Contract Analyzer</h1>
+        <p style="color: rgba(255,255,255,0.95); font-size: 1.2rem;">Please sign in to access your secure workspace.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if not CLIENT_ID or not CLIENT_SECRET:
+            st.warning("⚠️ Google Auth is not configured. Please add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to your .env file.")
+        else:
+            oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, TOKEN_URL, REVOKE_TOKEN_URL)
+            result = oauth2.authorize_button(
+                name="Continue with Google",
+                icon="https://www.google.com/favicon.ico",
+                redirect_uri="http://localhost:8501",
+                scope="openid email profile",
+                key="google",
+                extras_params={"prompt": "consent", "access_type": "offline"},
+                use_container_width=True
+            )
+            
+            if result:
+                id_token = result.get("token", {}).get("id_token")
+                if id_token:
+                    # Decode JWT without verification (Google verified it during the OAuth flow)
+                    payload = jwt.decode(id_token, options={"verify_signature": False})
+                    st.session_state.user_info = payload
+                    st.rerun()
+                    
+    st.stop() # Prevent loading the rest of the app
+
+# =====================================================
 # INITIALIZE DATABASE
 # =====================================================
 if 'db_conn' not in st.session_state:
     st.session_state.db_conn = init_database()
+
+# Save user to DB if just logged in
+if st.session_state.user_info and "db_saved" not in st.session_state:
+    save_user(
+        st.session_state.db_conn,
+        st.session_state.user_info.get("email"),
+        st.session_state.user_info.get("name"),
+        st.session_state.user_info.get("picture")
+    )
+    st.session_state.db_saved = True
 
 # =====================================================
 # SESSION STATE
@@ -629,48 +714,40 @@ def upload_contract(file) -> Dict[str, Any]:
     return {"contract_id": contract_id, "filename": file.name}
 def run_analysis(uploaded_file, tone: str, focus: List[str], risk_threshold: float) -> Dict[str, Any]:
     """
-    Run REAL AI analysis using backend (Parser → Clauses → LangGraph → Agents)
+    Run REAL AI analysis using FastAPI backend
     """
+    import requests
 
-    # 1️⃣ Extract text from uploaded PDF
-    with open("temp_contract.pdf", "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    from src.parser import load_contract
-    from src.analyzer.clause_extractor import extract_clauses
-    from src.langgraph_workflow import build_workflow
-
-    contract_text = load_contract("temp_contract.pdf")
-
-    # 2️⃣ Clause extraction
-    clauses = extract_clauses(contract_text)
-
-    # 3️⃣ Run LangGraph workflow
-    graph = build_workflow()
-
-    final_state = graph.invoke({
-        "contract_text": contract_text,
-        "clauses": clauses,
+    API_URL = "http://localhost:8000/analyze"
+    
+    files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
+    data = {
         "tone": tone,
-        "focus": focus,
-        "risk_threshold": risk_threshold
-    })
-
-    result = final_state["final_report"]
-
-    # -------------------------------
-    # Normalize final report structure
-    # -------------------------------
-    normalized_result = {
-        "summary": result.get("summary")
-        or result.get("executive_summary")
-        or result.get("overall_summary")
-        or "Summary not generated",
-
-        "confidence": result.get("confidence", 0.85),
-        "risk_score": result.get("risk_score", 0.5),
-        "domains": result.get("domains", {})
+        "focus": json.dumps(focus),
+        "risk_threshold": risk_threshold,
+        "contract_id": st.session_state.contract_info["contract_id"]
     }
+
+    try:
+        response = requests.post(API_URL, files=files, data=data)
+        response.raise_for_status()
+        result = response.json()
+        
+        normalized_result = {
+            "summary": result.get("summary") or "Summary not generated",
+            "confidence": result.get("confidence", 0.95),
+            "risk_score": result.get("risk_score", 0.5),
+            "domains": result.get("domains", {})
+        }
+    except Exception as e:
+        st.error(f"Failed to connect to FastAPI Backend: {e}")
+        # Return fallback result
+        normalized_result = {
+            "summary": "Error during analysis via FastAPI.",
+            "confidence": 0.0,
+            "risk_score": 1.0,
+            "domains": {}
+        }
 
     # -------------------------------
     # Save normalized analysis to DB
@@ -687,21 +764,6 @@ def run_analysis(uploaded_file, tone: str, focus: List[str], risk_threshold: flo
     )
 
     return normalized_result
-
-    
-    # 4️⃣ Save REAL analysis to DB
-    save_analysis(
-        st.session_state.db_conn,
-        st.session_state.contract_info["contract_id"],
-        result,
-        {
-            "tone": tone,
-            "domains": focus,
-            "risk_threshold": risk_threshold
-        }
-    )
-
-    return result
 
 
 
@@ -721,6 +783,22 @@ st.markdown("""
 # SIDEBAR
 # =====================================================
 with st.sidebar:
+    st.markdown(f'''
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+            <img src="{st.session_state.user_info.get("picture", "")}" width="40" style="border-radius: 50%;">
+            <div>
+                <strong style="color: white;">{st.session_state.user_info.get("name", "User")}</strong><br>
+                <small style="color: #94a3b8;">{st.session_state.user_info.get("email", "")}</small>
+            </div>
+        </div>
+    ''', unsafe_allow_html=True)
+    if st.button("Logout", use_container_width=True):
+        st.session_state.user_info = None
+        if "db_saved" in st.session_state:
+            del st.session_state.db_saved
+        st.rerun()
+    st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
     st.markdown("""
     <div class="sidebar-header">
         <h3 style="color: white; margin: 0; font-size: 1.2rem;">⚙️ Analysis Dashboard</h3>

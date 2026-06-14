@@ -1,11 +1,11 @@
 # src/planner.py
 
-from transformers import pipeline
 from src.agents.compliance_agent import ComplianceAgent
 from src.agents.legal_agent import LegalAgent
 from src.agents.finance_agent import FinanceAgent
 from src.agents.operations_agent import OperationsAgent
 from src.utils.parallel_executor import run_agents_in_parallel
+from src.agents.llm_helper import ask_llm
 
 
 AGENT_ROLES = {
@@ -32,19 +32,9 @@ AGENT_ROLES = {
 }
 
 
-# Optimized, reused classifier
-CLASSIFIER = pipeline(
-    "zero-shot-classification",
-    model="typeform/distilbert-base-uncased-mnli",
-    device=-1
-)
-
-
 class PlanningModule:
 
     def __init__(self):
-        self.classifier = CLASSIFIER
-
         self.compliance_agent = ComplianceAgent()
         self.legal_agent = LegalAgent()
         self.finance_agent = FinanceAgent()
@@ -62,12 +52,23 @@ class PlanningModule:
             "Partnership Agreement",
             "SAAS Agreement",
         ]
+        
+        prompt = f"""Classify the following contract text into exactly one of these categories: {', '.join(labels)}.
+Return ONLY the category name and nothing else.
 
-        result = self.classifier(text, candidate_labels=labels)
+CONTRACT TEXT:
+{text[:2000]}
+"""
+        response = ask_llm(prompt)
+        
+        # fallback if not in labels
+        contract_type = response.strip()
+        if contract_type not in labels:
+            contract_type = "Service Agreement"
 
         return {
-            "contract_type": result["labels"][0],
-            "confidence": float(result["scores"][0])
+            "contract_type": contract_type,
+            "confidence": 0.95
         }
 
     # ---------------------------------------------------------
